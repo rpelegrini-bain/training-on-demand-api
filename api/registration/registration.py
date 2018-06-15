@@ -7,15 +7,19 @@ __copyright__ = "Copyright 2018, Bain & Co"
 #base imports
 import os
 import re
+import uuid
 import logging
 import json
 import traceback
+import time
+import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
 #utilities imports
 import boto3
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 # local imports
@@ -28,11 +32,11 @@ LOGGER = logging.getLogger()
 LOGGER.setLevel(logging.INFO)
 LAMBDA_CLIENT = boto3.client('lambda')
 
-#configure access to lambda configurations
-#DYNAMO_DB = boto3.resource('dynamodb', region_name='sa-east-1')
+#configure access to aws resources
+DYNAMO_DB = boto3.resource('dynamodb', region_name='sa-east-1')
 SES_CLIENT = boto3.client('ses', region_name='us-west-2')
-#USER_TABLE = DYNAMO_DB.Table('user_' + ENVIRONMENT)
-#R_TOKEN_TABLE = DYNAMO_DB.Table('r_token_' + ENVIRONMENT)
+USER_TABLE = DYNAMO_DB.Table('user_' + ENVIRONMENT)
+R_TOKEN_TABLE = DYNAMO_DB.Table('r_token_' + ENVIRONMENT)
 
 SENDER = "Training On-Demand <registration@trainingondemand.io>"
 
@@ -47,24 +51,39 @@ def register(event, context):
     """
     try:
         #check if email is registered at bain
-        if re.match(r'^[a-zA-Z0-9_+&*-\.]*?@bain\.com$', event['body-json']['email']):
+        if re.match(r'^[a-zA-Z0-9_+&*-\.]*?\.[a-zA-Z0-9_+&*-\.]*?@bain\.com$', event['body-json']['email']):
 
             #check if user is already registered
-            if 1 == 1:
+            if 'Item' not in USER_TABLE.get_item(Key={'email':event['body-json']['email']}):
+                
                 #create deactivated user
-                #TODO
+                USER_TABLE.put_item(Item={
+                    'email':event['body-json']['email'],
+                    'name':event['body-json']['email'][:-9].replace('.', ' ').title(),
+                    'type':'USER',
+                    'active':False,
+                    'trainer':[],
+                    'trainee':[]
+                })
 
                 #generate token
-                #TODO
+                token_id = str(uuid.uuid4())
+                R_TOKEN_TABLE.put_item(Item={
+                    'id':token_id,
+                    'creation':int(time.mktime(datetime.datetime.now().timetuple())),
+                    'email':event['body-json']['email']
+                })
 
                 message = MIMEMultipart('mixed')
                 message['Subject'] = 'Bem-vindo ao Training On-Demand!'
                 message['From'] = SENDER
                 message['To'] = event['body-json']['email']
 
+                email_content = 'Olá, termine seu cadastro entrando no link:\nhttps://trainingondemand.io/register/check/' + token_id
+                
                 message_body = MIMEMultipart('alternative')
-                text_body = MIMEText('Olar'.encode('utf-8'), 'plain', 'utf-8')
-                html_body = MIMEText('Olaros'.encode('utf-8'), 'plain', 'utf-8')
+                text_body = MIMEText(email_content.encode('utf-8'), 'plain', 'utf-8')
+                html_body = MIMEText(email_content.encode('utf-8'), 'plain', 'utf-8')
                 message_body.attach(text_body)
                 message_body.attach(html_body)
                 message.attach(message_body)
@@ -85,7 +104,8 @@ def register(event, context):
                     'message':'registration completed'
                 }
             else:
-                output = {'status':'error', 'message':'failed registration'}
+                LOGGER.info('Atempt to register existent user.')
+                output = {'status':'success', 'message':'registration completed'}
         else:
             output = {'status':'error', 'message':'invalid email'}
 
